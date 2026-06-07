@@ -12,7 +12,7 @@
       <div class="auth-copy">
         <p class="kicker">JCC Admin Console</p>
         <h1 id="loginTitle">金铲铲阵容中控台</h1>
-        <p class="auth-description">参考官方资料站的信息密度与内容组织，重做为更克制、清晰的内部管理工作台。</p>
+        <p class="auth-description">接入本地真实 API 的阵容资料管理台，支持阵容、英雄、羁绊、装备独立维护。</p>
       </div>
 
       <form id="loginForm" class="auth-form">
@@ -28,7 +28,7 @@
         <p id="loginError" class="form-message" role="alert" aria-live="polite"></p>
         <div class="auth-note">
           <span>管理员权限</span>
-          <strong>仅开放单账户登录，不提供注册入口</strong>
+          <strong>默认账号 / 密码：YJJ / YJJ</strong>
         </div>
       </form>
     </section>
@@ -48,13 +48,17 @@
         <button class="nav-item active" data-view="comps" type="button">阵容库</button>
         <button class="nav-item" data-view="builder" type="button">羁绊模拟</button>
         <button class="nav-item" data-view="items" type="button">装备合成</button>
-        <button class="nav-item" data-view="admin" type="button">管理后台</button>
+        <button class="nav-item" data-view="recognition" type="button">屏幕识别</button>
+        <button class="nav-item" data-view="admin" type="button">阵容管理</button>
+        <button class="nav-item" data-view="heroAdmin" type="button">英雄管理</button>
+        <button class="nav-item" data-view="traitAdmin" type="button">羁绊管理</button>
+        <button class="nav-item" data-view="itemAdmin" type="button">装备管理</button>
       </nav>
 
       <div class="sidebar-meta">
-        <span>运行方式</span>
-        <strong>本地静态站点</strong>
-        <small>阵容数据与登录态均保存在当前浏览器 localStorage。</small>
+        <span>数据源</span>
+        <strong id="dataSourceText">正在连接 API</strong>
+        <small>通过本地 Node API 读写 data.json；离线时自动使用浏览器缓存兜底。</small>
       </div>
     </aside>
 
@@ -63,7 +67,11 @@
         <div>
           <p id="viewEyebrow" class="kicker">Meta Overview</p>
           <h2 id="viewTitle">阵容库</h2>
-          <p id="viewDescription" class="page-description">按强度、难度与核心英雄快速筛选当前版本可用阵容。</p>
+          <p id="viewDescription" class="page-description">按强度、难度与核心英雄筛选当前版本阵容。</p>
+          <div class="version-strip">
+            <span id="versionBadge">版本 --</span>
+            <span id="updatedBadge">更新时间 --</span>
+          </div>
         </div>
         <div class="topbar-actions">
           <label class="search-field" for="globalSearch">
@@ -76,14 +84,13 @@
               <strong id="accountName">YJJ</strong>
             </div>
             <span class="role-badge">管理员</span>
-            <button id="logoutBtn" class="ghost-button" type="button">退出登录</button>
+            <button id="logoutBtn" class="ghost-button" type="button">退出</button>
           </div>
         </div>
       </header>
 
       <section id="compsView" class="view active" aria-labelledby="viewTitle">
         <div class="overview-grid" id="overviewGrid"></div>
-
         <div class="toolbar">
           <div class="segmented" role="tablist" aria-label="强度筛选">
             <button class="filter-button active" data-tier="全部" type="button">全部</button>
@@ -98,10 +105,10 @@
               <option value="中等">中等</option>
               <option value="困难">困难</option>
             </select>
-            <button id="resetDataBtn" class="ghost-button" type="button">恢复种子数据</button>
+            <button id="reloadDataBtn" class="ghost-button" type="button">重新拉取 API</button>
+            <button id="resetDataBtn" class="danger-button" type="button">恢复种子数据</button>
           </div>
         </div>
-
         <div class="two-column-layout">
           <section class="surface">
             <div class="section-heading">
@@ -113,7 +120,6 @@
             </div>
             <div id="compList" class="list-stack"></div>
           </section>
-
           <section class="surface detail-surface">
             <div class="section-heading">
               <div>
@@ -134,11 +140,10 @@
                 <p class="section-label">Hero Pool</p>
                 <h3>英雄池</h3>
               </div>
-              <button id="clearBuilderBtn" class="ghost-button" type="button">清空选择</button>
+              <button id="clearBuilderBtn" class="ghost-button" type="button">清空</button>
             </div>
             <div id="heroPool" class="chip-grid"></div>
           </section>
-
           <section class="surface">
             <div class="section-heading">
               <div>
@@ -161,18 +166,17 @@
                 <p class="section-label">Base Items</p>
                 <h3>基础散件</h3>
               </div>
-              <span class="section-meta">连续点选两个散件即可查看结果</span>
+              <span class="section-meta">连续选择两个散件查看结果</span>
             </div>
             <div id="baseItems" class="chip-grid item-grid"></div>
           </section>
-
           <section class="surface">
             <div class="section-heading">
               <div>
                 <p class="section-label">Recipe Board</p>
                 <h3>合成结果</h3>
               </div>
-              <button id="clearItemsBtn" class="ghost-button" type="button">清空选择</button>
+              <button id="clearItemsBtn" class="ghost-button" type="button">清空</button>
             </div>
             <div id="itemRecipeResult" class="recipe-hero"></div>
             <div class="section-heading compact-heading">
@@ -186,89 +190,205 @@
         </div>
       </section>
 
+      <section id="recognitionView" class="view" aria-labelledby="viewTitle">
+        <div class="two-column-layout">
+          <section class="surface">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Screen Capture</p>
+                <h3>屏幕捕获</h3>
+              </div>
+              <div class="toolbar-actions">
+                <button id="startCaptureBtn" class="primary-button" type="button">开始捕获</button>
+                <button id="retakeBtn" class="ghost-button is-hidden" type="button">重新截图</button>
+              </div>
+            </div>
+            <div id="captureArea" class="capture-area">
+              <div class="capture-placeholder">
+                <span class="capture-icon" aria-hidden="true">□</span>
+                <p>选择游戏窗口后自动识别画面文字</p>
+                <small>需要通过 localhost 访问，file:// 无法使用屏幕捕获 API。</small>
+              </div>
+              <canvas id="captureCanvas" class="capture-canvas is-hidden"></canvas>
+              <img id="capturePreview" class="capture-preview is-hidden" alt="截图预览">
+            </div>
+            <div id="ocrProgress" class="ocr-progress is-hidden">
+              <div class="progress-bar"><span id="ocrProgressBar"></span></div>
+              <p id="ocrProgressText">正在加载识别引擎...</p>
+            </div>
+          </section>
+          <section class="surface">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Recognition Result</p>
+                <h3>识别结果</h3>
+              </div>
+              <button id="fillFormBtn" class="primary-button is-hidden" type="button">填入阵容管理</button>
+            </div>
+            <div id="recognitionResult" class="recognition-result">
+              <div class="detail-empty">截图后自动识别英雄、羁绊与装备。</div>
+            </div>
+            <div id="ocrRawText" class="ocr-raw-text is-hidden">
+              <div class="section-heading compact-heading">
+                <div>
+                  <p class="section-label">OCR Raw Text</p>
+                  <h3>识别原文</h3>
+                </div>
+                <button id="toggleRawTextBtn" class="ghost-button" type="button">展开</button>
+              </div>
+              <pre id="rawTextContent" class="raw-text-content is-hidden"></pre>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <section id="adminView" class="view" aria-labelledby="viewTitle">
         <div class="two-column-layout admin-layout">
           <section class="surface">
             <div class="section-heading">
               <div>
-                <p class="section-label">Admin Catalog</p>
+                <p class="section-label">Lineup Admin</p>
                 <h3>阵容管理</h3>
               </div>
               <button id="newCompBtn" class="primary-button" type="button">新增阵容</button>
             </div>
             <div id="adminCompList" class="list-stack"></div>
           </section>
-
           <section class="surface">
             <div class="section-heading">
               <div>
-                <p class="section-label">Admin Editor</p>
+                <p class="section-label">Lineup Editor</p>
                 <h3>编辑阵容</h3>
               </div>
               <span id="saveState" class="section-meta">未修改</span>
             </div>
-
             <form id="compForm" class="admin-form">
               <input id="compId" type="hidden">
-
               <div class="field-group">
                 <label for="formName">阵容名称</label>
                 <input id="formName" type="text" required placeholder="例如：剪纸仙灵凯尔">
               </div>
-
               <div class="form-row">
                 <div class="field-group">
                   <label for="formTier">强度评级</label>
-                  <select id="formTier">
-                    <option>S</option>
-                    <option>A</option>
-                    <option>B</option>
-                  </select>
+                  <select id="formTier"><option>S</option><option>A</option><option>B</option></select>
                 </div>
                 <div class="field-group">
                   <label for="formDifficulty">运营难度</label>
-                  <select id="formDifficulty">
-                    <option>简单</option>
-                    <option>中等</option>
-                    <option>困难</option>
-                  </select>
+                  <select id="formDifficulty"><option>简单</option><option>中等</option><option>困难</option></select>
                 </div>
               </div>
-
               <div class="field-group">
                 <label for="formCarries">核心英雄</label>
-                <input id="formCarries" type="text" placeholder="使用中文逗号分隔">
+                <input id="formCarries" type="text" placeholder="使用逗号分隔">
               </div>
-
               <div class="field-group">
                 <label for="formHeroes">阵容英雄</label>
-                <input id="formHeroes" type="text" placeholder="使用中文逗号分隔">
+                <input id="formHeroes" type="text" placeholder="使用逗号分隔">
               </div>
-
               <div class="field-group">
                 <label for="formTraits">主要羁绊</label>
-                <input id="formTraits" type="text" placeholder="使用中文逗号分隔">
+                <input id="formTraits" type="text" placeholder="使用逗号分隔">
               </div>
-
+              <div class="field-group">
+                <label for="formAugments">推荐强化符文</label>
+                <input id="formAugments" type="text" placeholder="例如：珠光莲花, 战力类强化, 经济类强化">
+              </div>
               <div class="field-group">
                 <label for="formItems">装备建议</label>
                 <textarea id="formItems" rows="5" placeholder="每行格式：英雄: 装备1, 装备2, 装备3"></textarea>
               </div>
-
               <div class="field-group">
                 <label for="formPlan">运营节奏</label>
-                <textarea id="formPlan" rows="5" placeholder="记录关键回合、提速节点与搜牌时机"></textarea>
+                <textarea id="formPlan" rows="5" placeholder="记录关键回合、升级、搜牌与转阵节点"></textarea>
               </div>
-
               <div class="field-group">
-                <label for="formPositioning">站位提示</label>
-                <textarea id="formPositioning" rows="4" placeholder="描述对位、分散与保护核心的站位逻辑"></textarea>
+                <label for="formPositioning">站位说明</label>
+                <textarea id="formPositioning" rows="4" placeholder="说明对位、分散、保护核心的思路"></textarea>
               </div>
-
+              <div class="field-group">
+                <label for="positionHeroSelect">阵容站位图</label>
+                <div class="position-editor-toolbar">
+                  <select id="positionHeroSelect"></select>
+                  <button id="clearPositionBtn" class="ghost-button" type="button">清空站位</button>
+                </div>
+                <div id="positionEditor" class="position-board editor-board" aria-label="站位编辑器"></div>
+              </div>
               <div class="form-actions">
                 <button class="primary-button" type="submit">保存阵容</button>
                 <button id="deleteCompBtn" class="danger-button" type="button">删除阵容</button>
               </div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="heroAdminView" class="view" aria-labelledby="viewTitle">
+        <div class="manager-grid">
+          <section class="surface">
+            <div class="section-heading">
+              <div><p class="section-label">Hero Admin</p><h3>英雄管理</h3></div>
+              <button id="newHeroBtn" class="primary-button" type="button">新增英雄</button>
+            </div>
+            <div id="heroAdminList" class="list-stack"></div>
+          </section>
+          <section class="surface">
+            <div class="section-heading"><div><p class="section-label">Hero Editor</p><h3>编辑英雄</h3></div></div>
+            <form id="heroForm" class="admin-form">
+              <input id="heroId" type="hidden">
+              <div class="field-group"><label for="heroName">英雄名称</label><input id="heroName" required></div>
+              <div class="field-group"><label for="heroCost">费用</label><input id="heroCost" type="number" min="1" max="5" required></div>
+              <div class="field-group"><label for="heroTraits">羁绊</label><input id="heroTraits" placeholder="使用逗号分隔"></div>
+              <div class="form-actions"><button class="primary-button" type="submit">保存英雄</button><button id="deleteHeroBtn" class="danger-button" type="button">删除英雄</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="traitAdminView" class="view" aria-labelledby="viewTitle">
+        <div class="manager-grid">
+          <section class="surface">
+            <div class="section-heading">
+              <div><p class="section-label">Trait Admin</p><h3>羁绊管理</h3></div>
+              <button id="newTraitBtn" class="primary-button" type="button">新增羁绊</button>
+            </div>
+            <div id="traitAdminList" class="list-stack"></div>
+          </section>
+          <section class="surface">
+            <div class="section-heading"><div><p class="section-label">Trait Editor</p><h3>编辑羁绊</h3></div></div>
+            <form id="traitForm" class="admin-form">
+              <input id="traitId" type="hidden">
+              <div class="field-group"><label for="traitName">羁绊名称</label><input id="traitName" required></div>
+              <div class="field-group"><label for="traitBreakpoints">触发人数</label><input id="traitBreakpoints" placeholder="例如：2, 4, 6, 8"></div>
+              <div class="field-group"><label for="traitDesc">说明</label><textarea id="traitDesc" rows="4"></textarea></div>
+              <div class="form-actions"><button class="primary-button" type="submit">保存羁绊</button><button id="deleteTraitBtn" class="danger-button" type="button">删除羁绊</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="itemAdminView" class="view" aria-labelledby="viewTitle">
+        <div class="manager-grid">
+          <section class="surface">
+            <div class="section-heading">
+              <div><p class="section-label">Item Admin</p><h3>装备管理</h3></div>
+              <button id="newItemBtn" class="primary-button" type="button">新增装备</button>
+            </div>
+            <div id="itemAdminList" class="list-stack"></div>
+          </section>
+          <section class="surface">
+            <div class="section-heading"><div><p class="section-label">Item Editor</p><h3>编辑装备</h3></div></div>
+            <form id="itemForm" class="admin-form">
+              <input id="itemOriginalId" type="hidden">
+              <div class="form-row">
+                <div class="field-group"><label for="itemId">装备 ID</label><input id="itemId" required placeholder="例如：sword"></div>
+                <div class="field-group"><label for="itemKind">类型</label><select id="itemKind"><option value="base">基础散件</option><option value="recipe">合成装备</option></select></div>
+              </div>
+              <div class="field-group"><label for="itemName">装备名称</label><input id="itemName" required></div>
+              <div class="field-group"><label for="itemStat">属性 / 说明</label><textarea id="itemStat" rows="4"></textarea></div>
+              <div class="field-group recipe-only"><label for="itemRecipeParts">合成散件 ID</label><input id="itemRecipeParts" placeholder="例如：sword, bow"></div>
+              <div class="field-group recipe-only"><label for="itemTags">装备标签</label><input id="itemTags" placeholder="使用逗号分隔"></div>
+              <div class="form-actions"><button class="primary-button" type="submit">保存装备</button><button id="deleteItemBtn" class="danger-button" type="button">删除装备</button></div>
             </form>
           </section>
         </div>
@@ -278,6 +398,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
