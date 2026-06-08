@@ -302,6 +302,13 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 .capture-placeholder small { color: var(--soft); font-size: 12px; }
 .capture-canvas { display: none; }
 .capture-preview { max-width: 100%; border-radius: var(--radius); border: 1px solid var(--line); }
+.capture-video { max-width: 100%; border-radius: var(--radius); border: 1px solid var(--line); background: #000; }
+.live-indicator { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 13px; color: #ef4444; font-weight: 600; }
+.live-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.interval-select { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.interval-select span { white-space: nowrap; }
+.interval-select select { min-height: 36px; width: auto; padding: 4px 8px; font-size: 13px; }
 .ocr-progress { padding: 16px; display: grid; gap: 10px; }
 .ocr-progress p { margin: 0; color: var(--muted); font-size: 13px; }
 .recognition-result { padding: 16px; display: grid; gap: 12px; min-height: 200px; }
@@ -332,7 +339,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   .search-field { width: 100%; }
 }
 @media (max-width: 980px) {
-  .app-shell, .auth-panel, .two-column-layout, .admin-layout, .manager-grid { grid-template-columns: 1fr; }
+  .app-shell, .auth-panel, .two-column-layout, .admin-layout, .manager-grid, .assistant-layout { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
   .nav-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .list-stack { max-height: none; }
@@ -351,3 +358,69 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; animation: none !important; }
 }
+
+/* ── Game Assistant ── */
+.assistant-layout { display: grid; grid-template-columns: minmax(360px, 0.45fr) minmax(0, 1fr); gap: 16px; }
+.ga-comp-select { padding: 14px; display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.ga-comp-option {
+  padding: 12px; display: flex; align-items: center; gap: 12px; cursor: pointer;
+  border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(13, 27, 34, 0.88);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+.ga-comp-option:hover, .ga-comp-option.selected {
+  border-color: rgba(53, 208, 127, 0.42); background: var(--accent-soft);
+}
+.ga-comp-option .tag { flex-shrink: 0; }
+.ga-comp-option strong { font-size: 14px; }
+.ga-comp-option small { color: var(--muted); font-size: 12px; }
+.ga-panel { padding: 14px 16px; border-top: 1px solid rgba(40, 70, 80, 0.5); }
+.ga-panel-title { margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+.ga-buy-list, .ga-trait-list, .ga-item-list, .ga-opponent-list, .ga-position-advice {
+  display: grid; gap: 8px;
+}
+.ga-buy-item {
+  padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+  border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(19, 38, 47, 0.78);
+}
+.ga-buy-item.carry { border-color: rgba(245, 182, 66, 0.38); background: rgba(245, 182, 66, 0.08); }
+.ga-buy-item .cost-badge {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border-radius: 50%; font-size: 13px; font-weight: 700;
+}
+.ga-buy-item .cost-1 { background: #1a1a2e; color: #8b8b8b; }
+.ga-buy-item .cost-2 { background: #1a2e1a; color: #11b288; }
+.ga-buy-item .cost-3 { background: #1a1a3e; color: #2080ff; }
+.ga-buy-item .cost-4 { background: #2e1a3e; color: #c84dff; }
+.ga-buy-item .cost-5 { background: #3e2a1a; color: #ffb833; }
+.ga-buy-item .buy-info { flex: 1; }
+.ga-buy-item .buy-info strong { font-size: 14px; }
+.ga-buy-item .buy-info small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.ga-trait-item {
+  padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(19, 38, 47, 0.78);
+}
+.ga-trait-item.active { border-color: rgba(53, 208, 127, 0.42); background: var(--accent-soft); }
+.ga-trait-item .trait-name { font-size: 13px; font-weight: 600; }
+.ga-trait-item .trait-count { font-size: 12px; color: var(--muted); }
+.ga-item-card {
+  padding: 10px 12px; display: flex; gap: 8px; align-items: center;
+  border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(19, 38, 47, 0.78);
+}
+.ga-item-card .item-hero { font-weight: 600; font-size: 13px; color: var(--accent); }
+.ga-item-card .item-names { font-size: 13px; color: var(--muted); }
+.ga-opponent-card {
+  padding: 10px 12px;
+  border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(19, 38, 47, 0.78);
+}
+.ga-opponent-card h5 { margin: 0 0 6px; font-size: 13px; }
+.ga-opponent-card p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.ga-position-box {
+  padding: 12px; border: 1px solid rgba(40, 70, 80, 0.78); background: rgba(19, 38, 47, 0.78);
+  font-size: 13px; color: var(--muted); line-height: 1.7;
+}
+.ocr-status {
+  padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-top: 1px solid rgba(40, 70, 80, 0.5); font-size: 12px; color: var(--muted);
+}
+.ocr-status .online { color: var(--accent); }
+.ocr-status .offline { color: var(--danger); }

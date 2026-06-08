@@ -6,6 +6,7 @@ const root = __dirname;
 const dataPath = path.join(root, "data.json");
 const seedPath = path.join(root, "data.seed.json");
 const port = Number(process.env.PORT || 4173);
+const ocrPort = Number(process.env.OCR_PORT || 5000);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -31,7 +32,7 @@ function seedData() {
   }
 
   return {
-    meta: { version: "S11.6", updatedAt: nowText(), source: "Node API data.json" },
+    meta: { version: "星神", updatedAt: nowText(), source: "Node API data.json" },
     traits: [
       { id: "trait-storyweaver", name: "剪纸仙灵", breakpoints: [3, 5, 7, 10], desc: "召唤凯尔并随羁绊层级强化。", updatedAt: nowText() },
       { id: "trait-heavenly", name: "天将", breakpoints: [2, 3, 4, 5, 6], desc: "全队获得额外属性。", updatedAt: nowText() },
@@ -242,6 +243,35 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, data);
       return;
     }
+
+    // OCR proxy routes - forward to Python OCR server
+    if (req.url.startsWith("/ocr/") && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const ocrUrl = `http://127.0.0.1:${ocrPort}${req.url}`;
+      try {
+        const ocrRes = await fetch(ocrUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const ocrData = await ocrRes.json();
+        sendJson(res, ocrRes.status, ocrData);
+      } catch (err) {
+        sendJson(res, 502, { error: "OCR 服务不可用，请确认 ocr_server.py 已启动。", detail: err.message });
+      }
+      return;
+    }
+    if (req.url === "/ocr/health" && req.method === "GET") {
+      try {
+        const ocrRes = await fetch(`http://127.0.0.1:${ocrPort}/ocr/health`);
+        const ocrData = await ocrRes.json();
+        sendJson(res, 200, ocrData);
+      } catch {
+        sendJson(res, 502, { ok: false, error: "OCR 服务未启动" });
+      }
+      return;
+    }
+
     if (req.url.startsWith("/api/")) {
       sendJson(res, 404, { error: "Not found" });
       return;

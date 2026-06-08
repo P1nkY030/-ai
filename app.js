@@ -1,6 +1,6 @@
 const defaultData = {
   meta: {
-    version: "S11.6",
+    version: "星神",
     updatedAt: "2026-06-07 23:20",
     source: "内置种子数据"
   },
@@ -218,7 +218,19 @@ const state = {
     confirmedHeroes: [],
     confirmedTraits: [],
     confirmedItems: [],
-    isProcessing: false
+    isProcessing: false,
+    captureStream: null,
+    autoTimer: null
+  },
+  gameAssistant: {
+    selectedCompId: "",
+    isActive: false,
+    captureStream: null,
+    autoTimer: null,
+    isProcessing: false,
+    ocrOnline: false,
+    lastAnalysis: null,
+    currentHeroes: []
   }
 };
 
@@ -227,6 +239,7 @@ const viewMeta = {
   builder: { eyebrow: "Synergy Simulator", title: "羁绊模拟", description: "手动搭配英雄，实时查看羁绊触发节点。" },
   items: { eyebrow: "Item Recipes", title: "装备合成", description: "组合基础散件，快速确认成装方向与适配定位。" },
   recognition: { eyebrow: "Screen Recognition", title: "屏幕识别", description: "截取游戏画面，自动识别英雄、羁绊与装备信息。" },
+  gameAssistant: { eyebrow: "Game Assistant", title: "对局助手", description: "选择目标阵容，实时分析对局，智能推荐购买、站位与装备。" },
   admin: { eyebrow: "Lineup Admin", title: "阵容管理", description: "维护阵容、站位图、推荐强化符文、装备与运营节奏。" },
   heroAdmin: { eyebrow: "Hero Admin", title: "英雄管理", description: "独立维护英雄费用、羁绊与更新时间。" },
   traitAdmin: { eyebrow: "Trait Admin", title: "羁绊管理", description: "独立维护羁绊触发人数与说明。" },
@@ -251,12 +264,23 @@ const els = {
   itemAdminList: $("itemAdminList"), newItemBtn: $("newItemBtn"), itemForm: $("itemForm"), deleteItemBtn: $("deleteItemBtn"), itemKind: $("itemKind"),
   toast: $("toast"),
   views: {
-    comps: $("compsView"), builder: $("builderView"), items: $("itemsView"), recognition: $("recognitionView"), admin: $("adminView"),
+    comps: $("compsView"), builder: $("builderView"), items: $("itemsView"), recognition: $("recognitionView"),
+    gameAssistant: $("gameAssistantView"), admin: $("adminView"),
     heroAdmin: $("heroAdminView"), traitAdmin: $("traitAdminView"), itemAdmin: $("itemAdminView")
   },
-  startCaptureBtn: $("startCaptureBtn"), retakeBtn: $("retakeBtn"), captureCanvas: $("captureCanvas"), capturePreview: $("capturePreview"),
+  startCaptureBtn: $("startCaptureBtn"), stopCaptureBtn: $("stopCaptureBtn"), captureCanvas: $("captureCanvas"),
+  captureVideo: $("captureVideo"), capturePlaceholder: $("capturePlaceholder"), liveIndicator: $("liveIndicator"),
+  recognizeInterval: $("recognizeInterval"),
   ocrProgress: $("ocrProgress"), ocrProgressBar: $("ocrProgressBar"), ocrProgressText: $("ocrProgressText"), recognitionResult: $("recognitionResult"),
-  ocrRawText: $("ocrRawText"), rawTextContent: $("rawTextContent"), toggleRawTextBtn: $("toggleRawTextBtn"), fillFormBtn: $("fillFormBtn")
+  ocrRawText: $("ocrRawText"), rawTextContent: $("rawTextContent"), toggleRawTextBtn: $("toggleRawTextBtn"), fillFormBtn: $("fillFormBtn"),
+  // Game Assistant elements
+  gaCompSelect: $("gaCompSelect"), gaStartBtn: $("gaStartBtn"), gaStopBtn: $("gaStopBtn"),
+  gaVideo: $("gaVideo"), gaPlaceholder: $("gaPlaceholder"), gaLiveIndicator: $("gaLiveIndicator"),
+  gaCaptureBtn: $("gaCaptureBtn"), gaInterval: $("gaInterval"),
+  gaOcrStatusText: $("gaOcrStatusText"), gaCheckOcr: $("gaCheckOcr"),
+  gaAnalysisTime: $("gaAnalysisTime"), gaBuyList: $("gaBuyList"),
+  gaTraitList: $("gaTraitList"), gaItemList: $("gaItemList"),
+  gaOpponentList: $("gaOpponentList"), gaPositionAdvice: $("gaPositionAdvice")
 };
 
 const form = {
@@ -388,7 +412,7 @@ async function resetServerData() {
 
 function normalizeData(data) {
   const next = structuredClone(data || defaultData);
-  next.meta = { version: "S11.6", updatedAt: nowText(), source: "未知数据源", ...(next.meta || {}) };
+  next.meta = { version: "星神", updatedAt: nowText(), source: "未知数据源", ...(next.meta || {}) };
   next.traits ||= [];
   next.heroes ||= [];
   next.baseItems ||= [];
@@ -786,6 +810,7 @@ function renderAll() {
   renderHeroAdmin();
   renderTraitAdmin();
   renderItemAdmin();
+  renderGACompSelect();
 }
 
 function levenshteinDistance(a, b) {
@@ -817,32 +842,80 @@ function fuzzyMatch(text, candidates, threshold) {
 async function startCapture() {
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: "always" }, audio: false });
-    const video = document.createElement("video");
-    video.srcObject = stream;
-    await video.play();
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const canvas = els.captureCanvas;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    stream.getTracks().forEach(track => track.stop());
-    const imageData = canvas.toDataURL("image/png");
-    state.recognition.imageData = imageData;
-    els.capturePreview.src = imageData;
-    els.capturePreview.classList.remove("is-hidden");
-    els.retakeBtn.classList.remove("is-hidden");
-    els.startCaptureBtn.textContent = "重新捕获";
-    await performOCR(imageData);
+    state.recognition.captureStream = stream;
+
+    // 实时预览
+    els.captureVideo.srcObject = stream;
+    els.captureVideo.classList.remove("is-hidden");
+    els.capturePlaceholder.classList.add("is-hidden");
+    els.liveIndicator.classList.remove("is-hidden");
+    els.startCaptureBtn.classList.add("is-hidden");
+    els.stopCaptureBtn.classList.remove("is-hidden");
+
+    // 流结束时（用户关闭共享窗口）自动停止
+    stream.getTracks().forEach(track => {
+      track.addEventListener("ended", stopCapture);
+    });
+
+    showToast("已开始捕获，将定时自动识别画面。");
+
+    // 等 1 秒后执行第一次识别
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await captureAndRecognize();
+
+    // 启动定时识别
+    const interval = parseInt(els.recognizeInterval.value, 10) * 1000;
+    state.recognition.autoTimer = setInterval(captureAndRecognize, interval);
   } catch (err) {
     showToast(err.name === "NotAllowedError" ? "已取消屏幕捕获。" : `屏幕捕获失败：${err.message}`);
   }
 }
 
-async function performOCR(imageData) {
+function captureFrame() {
+  const video = els.captureVideo;
+  const canvas = els.captureCanvas;
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+async function captureAndRecognize() {
+  if (!state.recognition.captureStream || state.recognition.isProcessing) return;
+  const imageData = captureFrame();
+  state.recognition.imageData = imageData;
+  await performOCR(imageData, true);
+}
+
+function stopCapture() {
+  // 停止定时器
+  if (state.recognition.autoTimer) {
+    clearInterval(state.recognition.autoTimer);
+    state.recognition.autoTimer = null;
+  }
+  // 停止视频流
+  if (state.recognition.captureStream) {
+    state.recognition.captureStream.getTracks().forEach(track => track.stop());
+    state.recognition.captureStream = null;
+  }
+  els.captureVideo.srcObject = null;
+  els.captureVideo.classList.add("is-hidden");
+  els.capturePlaceholder.classList.remove("is-hidden");
+  els.liveIndicator.classList.add("is-hidden");
+  els.startCaptureBtn.classList.remove("is-hidden");
+  els.stopCaptureBtn.classList.add("is-hidden");
+  els.ocrProgress.classList.add("is-hidden");
+  showToast("已停止识别。");
+}
+
+async function performOCR(imageData, silent) {
   state.recognition.isProcessing = true;
+  if (!silent) {
+    els.ocrProgress.classList.remove("is-hidden");
+    els.recognitionResult.innerHTML = `<div class="recognition-loading"><div class="spinner"></div><p>正在识别游戏画面，请稍候...</p></div>`;
+    els.fillFormBtn.classList.add("is-hidden");
+  }
   els.ocrProgress.classList.remove("is-hidden");
-  els.recognitionResult.innerHTML = `<div class="recognition-loading"><div class="spinner"></div><p>正在识别游戏画面，请稍候...</p></div>`;
-  els.fillFormBtn.classList.add("is-hidden");
   try {
     if (!window.Tesseract) throw new Error("OCR 引擎未加载");
     const result = await Tesseract.recognize(imageData, "chi_sim+eng", {
@@ -855,6 +928,7 @@ async function performOCR(imageData) {
       }
     });
     const text = result.data.text;
+    const prevHeroes = state.recognition.matchedHeroes.join(",");
     state.recognition.ocrText = text;
     state.recognition.matchedHeroes = fuzzyMatch(text, state.data.heroes, 1);
     state.recognition.matchedTraits = fuzzyMatch(text, state.data.traits, 1);
@@ -867,9 +941,15 @@ async function performOCR(imageData) {
     els.ocrRawText.classList.remove("is-hidden");
     els.rawTextContent.textContent = text;
     els.fillFormBtn.classList.remove("is-hidden");
-    showToast(`识别完成，匹配到 ${state.recognition.matchedHeroes.length} 个英雄。`);
+    // 只在结果有变化时 toast
+    const newHeroes = state.recognition.matchedHeroes.join(",");
+    if (!silent || prevHeroes !== newHeroes) {
+      showToast(`识别完成，匹配到 ${state.recognition.matchedHeroes.length} 个英雄。`);
+    }
   } catch (err) {
-    els.recognitionResult.innerHTML = `<div class="detail-empty">识别失败：${escapeHtml(err.message)}</div>`;
+    if (!silent) {
+      els.recognitionResult.innerHTML = `<div class="detail-empty">识别失败：${escapeHtml(err.message)}</div>`;
+    }
     showToast("OCR 识别失败，请重试。");
   } finally {
     state.recognition.isProcessing = false;
@@ -915,14 +995,217 @@ function fillFormFromRecognition() {
 }
 
 function resetRecognition() {
-  state.recognition = { imageData: null, ocrText: "", matchedHeroes: [], matchedTraits: [], matchedItems: [], confirmedHeroes: [], confirmedTraits: [], confirmedItems: [], isProcessing: false };
-  els.capturePreview.classList.add("is-hidden");
-  els.capturePreview.src = "";
-  els.retakeBtn.classList.add("is-hidden");
-  els.startCaptureBtn.textContent = "开始捕获";
+  stopCapture();
+  state.recognition.imageData = null;
+  state.recognition.ocrText = "";
+  state.recognition.matchedHeroes = [];
+  state.recognition.matchedTraits = [];
+  state.recognition.matchedItems = [];
+  state.recognition.confirmedHeroes = [];
+  state.recognition.confirmedTraits = [];
+  state.recognition.confirmedItems = [];
   els.ocrRawText.classList.add("is-hidden");
   els.fillFormBtn.classList.add("is-hidden");
-  els.recognitionResult.innerHTML = `<div class="detail-empty">截图后自动识别英雄、羁绊与装备。</div>`;
+  els.recognitionResult.innerHTML = `<div class="detail-empty">选择游戏窗口后实时预览并自动识别。</div>`;
+}
+
+// ──────────────────────────────────────────
+// Game Assistant Functions
+// ──────────────────────────────────────────
+
+function renderGACompSelect() {
+  const comps = state.data.comps;
+  const selected = state.gameAssistant.selectedCompId;
+  els.gaCompSelect.innerHTML = comps.map(comp => `
+    <div class="ga-comp-option ${comp.id === selected ? "selected" : ""}" data-ga-comp="${comp.id}">
+      <span class="tag ${tierClass(comp.tier)}">${escapeHtml(comp.tier)}</span>
+      <div>
+        <strong>${escapeHtml(comp.name)}</strong>
+        <small>${(comp.heroes || []).slice(0, 4).map(escapeHtml).join(" / ")}${comp.heroes && comp.heroes.length > 4 ? "..." : ""}</small>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function checkOcrService() {
+  try {
+    const res = await requestJson("/ocr/health");
+    state.gameAssistant.ocrOnline = res.ok === true;
+    els.gaOcrStatusText.innerHTML = state.gameAssistant.ocrOnline
+      ? '<span class="online">✓ OCR 服务在线</span>'
+      : '<span class="offline">✗ OCR 服务未就绪</span>';
+  } catch {
+    state.gameAssistant.ocrOnline = false;
+    els.gaOcrStatusText.innerHTML = '<span class="offline">✗ OCR 服务未启动（请运行 python ocr_server.py）</span>';
+  }
+}
+
+async function startGameAssistant() {
+  const comp = state.data.comps.find(c => c.id === state.gameAssistant.selectedCompId);
+  if (!comp) {
+    showToast("请先选择目标阵容。");
+    return;
+  }
+  if (!state.gameAssistant.ocrOnline) {
+    showToast("OCR 服务未启动，请先运行 python ocr_server.py");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: "always" }, audio: false });
+    state.gameAssistant.captureStream = stream;
+    state.gameAssistant.isActive = true;
+
+    els.gaVideo.srcObject = stream;
+    els.gaVideo.classList.remove("is-hidden");
+    els.gaPlaceholder.classList.add("is-hidden");
+    els.gaLiveIndicator.classList.remove("is-hidden");
+    els.gaStartBtn.classList.add("is-hidden");
+    els.gaStopBtn.classList.remove("is-hidden");
+
+    stream.getTracks().forEach(track => {
+      track.addEventListener("ended", stopGameAssistant);
+    });
+
+    showToast("对局助手已启动，正在实时分析...");
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await gaCaptureAndAnalyze();
+
+    const interval = parseInt(els.gaInterval.value, 10) * 1000;
+    state.gameAssistant.autoTimer = setInterval(gaCaptureAndAnalyze, interval);
+  } catch (err) {
+    showToast(err.name === "NotAllowedError" ? "已取消屏幕捕获。" : `捕获失败：${err.message}`);
+  }
+}
+
+function stopGameAssistant() {
+  if (state.gameAssistant.autoTimer) {
+    clearInterval(state.gameAssistant.autoTimer);
+    state.gameAssistant.autoTimer = null;
+  }
+  if (state.gameAssistant.captureStream) {
+    state.gameAssistant.captureStream.getTracks().forEach(track => track.stop());
+    state.gameAssistant.captureStream = null;
+  }
+  state.gameAssistant.isActive = false;
+  els.gaVideo.srcObject = null;
+  els.gaVideo.classList.add("is-hidden");
+  els.gaPlaceholder.classList.remove("is-hidden");
+  els.gaLiveIndicator.classList.add("is-hidden");
+  els.gaStartBtn.classList.remove("is-hidden");
+  els.gaStopBtn.classList.add("is-hidden");
+  showToast("对局助手已停止。");
+}
+
+async function gaCaptureAndAnalyze() {
+  if (!state.gameAssistant.captureStream || state.gameAssistant.isProcessing) return;
+  state.gameAssistant.isProcessing = true;
+
+  try {
+    const video = els.gaVideo;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const imageData = canvas.toDataURL("image/png");
+
+    const comp = state.data.comps.find(c => c.id === state.gameAssistant.selectedCompId);
+
+    const result = await requestJson("/ocr/analyze-board", {
+      method: "POST",
+      body: JSON.stringify({
+        image: imageData,
+        targetComp: comp,
+        currentHeroes: state.gameAssistant.currentHeroes,
+        data: state.data
+      })
+    });
+
+    if (result.ok) {
+      state.gameAssistant.lastAnalysis = result;
+      // Update current heroes from recognition
+      const recognizedNames = (result.recognized?.heroes || []).map(h => h.name);
+      if (recognizedNames.length) {
+        state.gameAssistant.currentHeroes = [...new Set([...state.gameAssistant.currentHeroes, ...recognizedNames])];
+      }
+      renderGAAnalysis(result);
+      els.gaAnalysisTime.textContent = `更新于 ${nowText()}`;
+    }
+  } catch (err) {
+    console.error("GA analyze error:", err);
+  } finally {
+    state.gameAssistant.isProcessing = false;
+  }
+}
+
+function renderGAAnalysis(result) {
+  const { recognized, analysis } = result;
+
+  // Buy Priority
+  if (analysis.buyPriority && analysis.buyPriority.length) {
+    els.gaBuyList.innerHTML = analysis.buyPriority.map(item => `
+      <div class="ga-buy-item ${item.isCarry ? "carry" : ""}">
+        <div class="cost-badge cost-${item.cost}">${item.cost}费</div>
+        <div class="buy-info">
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>${item.isCarry ? "⭐ 核心英雄" : `羁绊补充`}</small>
+        </div>
+      </div>
+    `).join("");
+  } else if (analysis.missingHeroes && analysis.missingHeroes.length === 0) {
+    els.gaBuyList.innerHTML = `<div class="ga-position-box">✅ 阵容已成型！关注追三和装备分配。</div>`;
+  }
+
+  // Trait Status
+  if (analysis.traitStatus && analysis.traitStatus.length) {
+    els.gaTraitList.innerHTML = analysis.traitStatus.map(trait => `
+      <div class="ga-trait-item ${trait.active ? "active" : ""}">
+        <span class="trait-name">${escapeHtml(trait.name)}</span>
+        <div class="progress" style="--value:${trait.breakpoints.length ? Math.min(100, Math.round(trait.current / trait.breakpoints.at(-1) * 100)) : 0}%">
+          <span></span>
+        </div>
+        <span class="trait-count">${trait.current}/${trait.breakpoints.join("/")}</span>
+      </div>
+    `).join("");
+  }
+
+  // Item Recommendations
+  if (analysis.itemRecommendations && analysis.itemRecommendations.length) {
+    els.gaItemList.innerHTML = analysis.itemRecommendations.map(rec => `
+      <div class="ga-item-card">
+        <span class="item-hero">${escapeHtml(rec.hero)}${rec.isCarry ? " ⭐" : ""}</span>
+        <span class="item-names">→ ${rec.items.map(escapeHtml).join(" / ")}</span>
+      </div>
+    `).join("");
+  }
+
+  // Opponent Analysis
+  if (recognized.heroes && recognized.heroes.length) {
+    const opponentHeroes = recognized.heroes.filter(h => {
+      const comp = state.data.comps.find(c => c.id === state.gameAssistant.selectedCompId);
+      return comp && !comp.heroes.includes(h.name);
+    });
+    if (opponentHeroes.length) {
+      els.gaOpponentList.innerHTML = `
+        <div class="ga-opponent-card">
+          <h5>识别到的对手英雄</h5>
+          <p>${opponentHeroes.map(h => escapeHtml(h.name)).join(" / ")}</p>
+        </div>
+      `;
+    }
+  }
+
+  // Position Suggestion
+  if (analysis.positionSuggestion) {
+    els.gaPositionAdvice.innerHTML = `
+      <div class="ga-position-box">${escapeHtml(analysis.positionSuggestion)}</div>
+    `;
+    // Show board if available
+    const comp = state.data.comps.find(c => c.id === state.gameAssistant.selectedCompId);
+    if (comp && comp.board && comp.board.length) {
+      els.gaPositionAdvice.innerHTML += renderBoard(comp.board);
+    }
+  }
 }
 
 function bindEvents() {
@@ -1127,7 +1410,7 @@ function bindEvents() {
   });
 
   els.startCaptureBtn.addEventListener("click", startCapture);
-  els.retakeBtn.addEventListener("click", resetRecognition);
+  els.stopCaptureBtn.addEventListener("click", stopCapture);
   els.recognitionResult.addEventListener("click", event => {
     const chip = event.target.closest(".result-chip");
     if (!chip) return;
@@ -1138,11 +1421,24 @@ function bindEvents() {
     const isHidden = els.rawTextContent.classList.toggle("is-hidden");
     els.toggleRawTextBtn.textContent = isHidden ? "展开" : "收起";
   });
+
+  // Game Assistant events
+  els.gaCompSelect.addEventListener("click", event => {
+    const option = event.target.closest("[data-ga-comp]");
+    if (!option) return;
+    state.gameAssistant.selectedCompId = option.dataset.gaComp;
+    renderGACompSelect();
+  });
+  els.gaStartBtn.addEventListener("click", startGameAssistant);
+  els.gaStopBtn.addEventListener("click", stopGameAssistant);
+  els.gaCaptureBtn.addEventListener("click", gaCaptureAndAnalyze);
+  els.gaCheckOcr.addEventListener("click", checkOcrService);
 }
 
 async function init() {
   await loadDataFromApi({ silent: true });
   state.selectedCompId = state.data.comps[0]?.id || "";
+  state.gameAssistant.selectedCompId = state.data.comps[0]?.id || "";
   bindEvents();
   setView("comps");
   if (loadSession()) {
@@ -1153,6 +1449,7 @@ async function init() {
     setAuthenticated(false);
     els.usernameInput.focus();
   }
+  checkOcrService();
 }
 
 init();

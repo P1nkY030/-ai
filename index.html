@@ -27,8 +27,7 @@
         <button class="primary-button wide-button" type="submit">进入中控台</button>
         <p id="loginError" class="form-message" role="alert" aria-live="polite"></p>
         <div class="auth-note">
-          <span>管理员权限</span>
-          <strong>默认账号 / 密码：YJJ / YJJ</strong>
+          <span>请联系管理员获取账号密码</span>
         </div>
       </form>
     </section>
@@ -49,6 +48,7 @@
         <button class="nav-item" data-view="builder" type="button">羁绊模拟</button>
         <button class="nav-item" data-view="items" type="button">装备合成</button>
         <button class="nav-item" data-view="recognition" type="button">屏幕识别</button>
+        <button class="nav-item" data-view="gameAssistant" type="button">对局助手</button>
         <button class="nav-item" data-view="admin" type="button">阵容管理</button>
         <button class="nav-item" data-view="heroAdmin" type="button">英雄管理</button>
         <button class="nav-item" data-view="traitAdmin" type="button">羁绊管理</button>
@@ -199,22 +199,33 @@
                 <h3>屏幕捕获</h3>
               </div>
               <div class="toolbar-actions">
+                <label class="interval-select" for="recognizeInterval">
+                  <span>识别间隔</span>
+                  <select id="recognizeInterval">
+                    <option value="3">3 秒</option>
+                    <option value="5" selected>5 秒</option>
+                    <option value="10">10 秒</option>
+                  </select>
+                </label>
                 <button id="startCaptureBtn" class="primary-button" type="button">开始捕获</button>
-                <button id="retakeBtn" class="ghost-button is-hidden" type="button">重新截图</button>
+                <button id="stopCaptureBtn" class="danger-button is-hidden" type="button">停止识别</button>
               </div>
             </div>
             <div id="captureArea" class="capture-area">
-              <div class="capture-placeholder">
+              <div id="capturePlaceholder" class="capture-placeholder">
                 <span class="capture-icon" aria-hidden="true">□</span>
-                <p>选择游戏窗口后自动识别画面文字</p>
+                <p>选择游戏窗口后实时预览并自动识别</p>
                 <small>需要通过 localhost 访问，file:// 无法使用屏幕捕获 API。</small>
               </div>
               <canvas id="captureCanvas" class="capture-canvas is-hidden"></canvas>
-              <img id="capturePreview" class="capture-preview is-hidden" alt="截图预览">
+              <video id="captureVideo" class="capture-video is-hidden" autoplay muted playsinline></video>
+              <div id="liveIndicator" class="live-indicator is-hidden">
+                <span class="live-dot"></span> LIVE — 正在实时识别
+              </div>
             </div>
             <div id="ocrProgress" class="ocr-progress is-hidden">
               <div class="progress-bar"><span id="ocrProgressBar"></span></div>
-              <p id="ocrProgressText">正在加载识别引擎...</p>
+              <p id="ocrProgressText">正在识别...</p>
             </div>
           </section>
           <section class="surface">
@@ -237,6 +248,105 @@
                 <button id="toggleRawTextBtn" class="ghost-button" type="button">展开</button>
               </div>
               <pre id="rawTextContent" class="raw-text-content is-hidden"></pre>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="gameAssistantView" class="view" aria-labelledby="viewTitle">
+        <div class="assistant-layout">
+          <!-- Left: Target Comp + Capture -->
+          <section class="surface">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Target Comp</p>
+                <h3>选择目标阵容</h3>
+              </div>
+              <div class="toolbar-actions">
+                <button id="gaStartBtn" class="primary-button" type="button">开始对局</button>
+                <button id="gaStopBtn" class="danger-button is-hidden" type="button">结束对局</button>
+              </div>
+            </div>
+            <div id="gaCompSelect" class="ga-comp-select"></div>
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">Game Capture</p>
+                <h3>游戏画面</h3>
+              </div>
+              <div class="toolbar-actions">
+                <select id="gaInterval">
+                  <option value="3">3 秒</option>
+                  <option value="5" selected>5 秒</option>
+                  <option value="10">10 秒</option>
+                </select>
+                <button id="gaCaptureBtn" class="ghost-button" type="button">手动截图</button>
+              </div>
+            </div>
+            <div id="gaCaptureArea" class="capture-area">
+              <div id="gaPlaceholder" class="capture-placeholder">
+                <span class="capture-icon" aria-hidden="true">🎮</span>
+                <p>点击"开始对局"选择游戏窗口</p>
+                <small>需要先启动 OCR 服务：python ocr_server.py</small>
+              </div>
+              <video id="gaVideo" class="capture-video is-hidden" autoplay muted playsinline></video>
+              <div id="gaLiveIndicator" class="live-indicator is-hidden">
+                <span class="live-dot"></span> LIVE — 正在分析对局
+              </div>
+            </div>
+            <div id="gaOcrStatus" class="ocr-status">
+              <span id="gaOcrStatusText">OCR 服务状态：未检测</span>
+              <button id="gaCheckOcr" class="ghost-button" type="button">检测 OCR 服务</button>
+            </div>
+          </section>
+
+          <!-- Right: Analysis Results -->
+          <section class="surface">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Game Analysis</p>
+                <h3>对局分析</h3>
+              </div>
+              <span id="gaAnalysisTime" class="section-meta">等待开始</span>
+            </div>
+
+            <!-- Buy Priority -->
+            <div class="ga-panel">
+              <h4 class="ga-panel-title">🎯 购买优先级</h4>
+              <div id="gaBuyList" class="ga-buy-list">
+                <div class="detail-empty">选择目标阵容后开始分析。</div>
+              </div>
+            </div>
+
+            <!-- Trait Status -->
+            <div class="ga-panel">
+              <h4 class="ga-panel-title">🔗 羁绊进度</h4>
+              <div id="gaTraitList" class="ga-trait-list">
+                <div class="detail-empty">等待识别数据。</div>
+              </div>
+            </div>
+
+            <!-- Item Recommendations -->
+            <div class="ga-panel">
+              <h4 class="ga-panel-title">⚔️ 装备推荐</h4>
+              <div id="gaItemList" class="ga-item-list">
+                <div class="detail-empty">等待识别数据。</div>
+              </div>
+            </div>
+
+            <!-- Opponent Analysis -->
+            <div class="ga-panel">
+              <h4 class="ga-panel-title">👀 对手分析</h4>
+              <div id="gaOpponentList" class="ga-opponent-list">
+                <div class="detail-empty">等待识别对手棋盘。</div>
+              </div>
+            </div>
+
+            <!-- Position Suggestion -->
+            <div class="ga-panel">
+              <h4 class="ga-panel-title">📐 站位建议</h4>
+              <div id="gaPositionAdvice" class="ga-position-advice">
+                <div class="detail-empty">等待分析结果。</div>
+              </div>
             </div>
           </section>
         </div>
