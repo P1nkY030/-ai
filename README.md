@@ -135,3 +135,38 @@ pip install -r requirements.txt
 ├── install-autostart.bat   # 开机自启安装
 └── uninstall-autostart.bat # 开机自启卸载
 ```
+
+## YOLO Screen Recognition
+
+The Python recognition service now runs YOLO first and keeps PaddleOCR as a fallback. If no YOLO model exists, the service still starts and OCR continues to work.
+
+Default model path:
+
+```powershell
+models\screen.pt
+```
+
+Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Optional runtime settings:
+
+```powershell
+$env:YOLO_MODEL_PATH="C:\path\to\screen.pt"
+$env:YOLO_CONF="0.35"
+$env:YOLO_DEVICE="0"   # omit for auto/CPU
+python ocr_server.py
+```
+
+Recommended YOLO class names:
+
+```text
+hero_<hero name>
+trait_<trait name>
+item_<item name>
+```
+
+Class names can also be exact names from `data.json`. The response from `/ocr/recognize` includes `yolo.detections`, OCR `texts`, and merged `heroes` / `traits` / `items`.

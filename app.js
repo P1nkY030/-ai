@@ -916,46 +916,70 @@ async function performOCR(imageData, silent) {
     els.fillFormBtn.classList.add("is-hidden");
   }
   els.ocrProgress.classList.remove("is-hidden");
+  els.ocrProgressBar.style.width = "35%";
+  els.ocrProgressText.textContent = "正在调用 YOLO + OCR 服务...";
   try {
-    if (!window.Tesseract) throw new Error("OCR 引擎未加载");
-    const result = await Tesseract.recognize(imageData, "chi_sim+eng", {
-      logger: info => {
-        if (info.progress) {
-          const pct = Math.round(info.progress * 100);
-          els.ocrProgressBar.style.width = `${pct}%`;
-          els.ocrProgressText.textContent = `${info.status} ${pct}%`;
-        }
-      }
+    const result = await requestJson("/ocr/recognize", {
+      method: "POST",
+      body: JSON.stringify({
+        image: imageData,
+        data: state.data
+      })
     });
-    const text = result.data.text;
+    const text = (result.texts || []).map(item => item.text).join("\n");
     const prevHeroes = state.recognition.matchedHeroes.join(",");
+    els.ocrProgressBar.style.width = "80%";
+    els.ocrProgressText.textContent = "正在整理识别结果...";
     state.recognition.ocrText = text;
-    state.recognition.matchedHeroes = fuzzyMatch(text, state.data.heroes, 1);
-    state.recognition.matchedTraits = fuzzyMatch(text, state.data.traits, 1);
-    const allItems = [...state.data.baseItems.map(item => ({ name: item.name })), ...Object.values(state.data.recipes).map(item => ({ name: item.name }))];
-    state.recognition.matchedItems = fuzzyMatch(text, allItems, 1);
+    state.recognition.yolo = result.yolo || null;
+    state.recognition.matchedHeroes = (result.heroes || []).map(item => item.name);
+    state.recognition.matchedTraits = (result.traits || []).map(item => item.name);
+    state.recognition.matchedItems = (result.items || []).map(item => item.name);
     state.recognition.confirmedHeroes = [...state.recognition.matchedHeroes];
     state.recognition.confirmedTraits = [...state.recognition.matchedTraits];
     state.recognition.confirmedItems = [...state.recognition.matchedItems];
     renderRecognitionResults();
     els.ocrRawText.classList.remove("is-hidden");
-    els.rawTextContent.textContent = text;
+    els.rawTextContent.textContent = formatRecognitionDebug(result, text);
     els.fillFormBtn.classList.remove("is-hidden");
     // 只在结果有变化时 toast
     const newHeroes = state.recognition.matchedHeroes.join(",");
     if (!silent || prevHeroes !== newHeroes) {
-      showToast(`识别完成，匹配到 ${state.recognition.matchedHeroes.length} 个英雄。`);
+      const yoloCount = result.yolo?.detections?.length || 0;
+      showToast(`识别完成：YOLO ${yoloCount} 个目标，匹配到 ${state.recognition.matchedHeroes.length} 个英雄。`);
     }
   } catch (err) {
     if (!silent) {
       els.recognitionResult.innerHTML = `<div class="detail-empty">识别失败：${escapeHtml(err.message)}</div>`;
     }
-    showToast("OCR 识别失败，请重试。");
+    showToast("YOLO/OCR 识别失败，请确认 python ocr_server.py 已启动。");
   } finally {
     state.recognition.isProcessing = false;
     els.ocrProgress.classList.add("is-hidden");
     els.ocrProgressBar.style.width = "0%";
   }
+}
+
+function formatRecognitionDebug(result, text) {
+  const yolo = result.yolo || {};
+  const lines = [
+    `YOLO: ${yolo.enabled ? "enabled" : "disabled"} (${yolo.detections?.length || 0} detections)`,
+    `Model: ${yolo.modelPath || "not configured"}`
+  ];
+  if (yolo.error) lines.push(`YOLO error: ${yolo.error}`);
+  if (yolo.detections?.length) {
+    lines.push("");
+    lines.push("Detections:");
+    for (const item of yolo.detections) {
+      lines.push(`- ${item.label} ${Math.round(item.confidence * 100)}% [${item.box.join(", ")}]`);
+    }
+  }
+  if (text) {
+    lines.push("");
+    lines.push("OCR Text:");
+    lines.push(text);
+  }
+  return lines.join("\n");
 }
 
 function renderRecognitionResults() {

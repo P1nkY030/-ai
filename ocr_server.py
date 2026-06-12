@@ -1,6 +1,6 @@
 """
-JCC Console - PaddleOCR Backend Service
-Provides OCR recognition for TFT game screenshots.
+JCC Console - Screen Recognition Backend Service
+Provides YOLO detection and OCR recognition for TFT game screenshots.
 
 Usage:
   pip install -r requirements.txt
@@ -14,6 +14,8 @@ import io
 import json
 import base64
 import logging
+import re
+import importlib.util
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -30,23 +32,70 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Global OCR instance (lazy init)
+# Global model instances (lazy init)
 ocr_engine = None
+ocr_error = None
+yolo_model = None
+yolo_error = None
+
+YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", os.path.join("models", "screen.pt"))
+YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.35"))
+YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "").strip() or None
+
+
+def dependency_available(module_name):
+    """Return whether an optional Python dependency can be imported."""
+    return importlib.util.find_spec(module_name) is not None
 
 def get_ocr_engine():
-    """Lazy-initialize PaddleOCR engine."""
-    global ocr_engine
+    """Lazy-initialize PaddleOCR engine. Missing OCR is non-fatal."""
+    global ocr_engine, ocr_error
     if ocr_engine is None:
-        logger.info("Initializing PaddleOCR engine (first request may take ~10s)...")
-        from paddleocr import PaddleOCR
-        ocr_engine = PaddleOCR(
-            use_angle_cls=True,
-            lang="ch",
-            show_log=False,
-            use_gpu=False  # Set to True if you have CUDA
-        )
-        logger.info("PaddleOCR engine ready.")
+        if not dependency_available("paddleocr"):
+            ocr_error = "paddleocr is not installed"
+            return None
+        try:
+            logger.info("Initializing PaddleOCR engine (first request may take ~10s)...")
+            from paddleocr import PaddleOCR
+            ocr_engine = PaddleOCR(
+                use_angle_cls=True,
+                lang="ch",
+                show_log=False,
+                use_gpu=False  # Set to True if you have CUDA
+            )
+            ocr_error = None
+            logger.info("PaddleOCR engine ready.")
+        except Exception as exc:
+            ocr_error = str(exc)
+            logger.exception("PaddleOCR initialization failed")
+            return None
     return ocr_engine
+
+
+def get_yolo_model():
+    """Lazy-initialize YOLO model. Missing model is non-fatal."""
+    global yolo_model, yolo_error
+    if yolo_model is not None:
+        return yolo_model
+
+    if not os.path.exists(YOLO_MODEL_PATH):
+        yolo_error = f"YOLO model not found: {YOLO_MODEL_PATH}"
+        return None
+    if not dependency_available("ultralytics"):
+        yolo_error = "ultralytics is not installed"
+        return None
+
+    try:
+        logger.info("Initializing YOLO model from %s...", YOLO_MODEL_PATH)
+        from ultralytics import YOLO
+        yolo_model = YOLO(YOLO_MODEL_PATH)
+        yolo_error = None
+        logger.info("YOLO model ready.")
+        return yolo_model
+    except Exception as exc:
+        yolo_error = str(exc)
+        logger.exception("YOLO initialization failed")
+        return None
 
 
 def decode_image(image_data):
@@ -61,6 +110,9 @@ def decode_image(image_data):
 def run_ocr(image):
     """Run PaddleOCR on a PIL Image, return structured results."""
     ocr = get_ocr_engine()
+    if ocr is None:
+        return []
+
     img_array = np.array(image)
     results = ocr.ocr(img_array, cls=True)
 
@@ -77,6 +129,168 @@ def run_ocr(image):
             })
 
     return texts
+
+
+def run_yolo(image):
+    """Run YOLO on a PIL Image, return detection boxes and status."""
+    model = get_yolo_model()
+    if model is None:
+        return {
+            "enabled": False,
+            "modelPath": YOLO_MODEL_PATH,
+            "error": yolo_error,
+            "detections": []
+        }
+
+    img_array = np.array(image)
+    predict_args = {"conf": YOLO_CONF, "verbose": False}
+    if YOLO_DEVICE:
+        predict_args["device"] = YOLO_DEVICE
+
+    results = model.predict(img_array, **predict_args)
+    detections = []
+    if results:
+        result = results[0]
+        names = result.names or {}
+        for box in result.boxes:
+            cls_id = int(box.cls[0].item())
+            confidence = float(box.conf[0].item())
+            xyxy = [round(float(v), 2) for v in box.xyxy[0].tolist()]
+            detections.append({
+                "classId": cls_id,
+                "label": str(names.get(cls_id, cls_id)),
+                "confidence": round(confidence, 4),
+                "box": xyxy
+            })
+
+    return {
+        "enabled": True,
+        "modelPath": YOLO_MODEL_PATH,
+        "confidence": YOLO_CONF,
+        "detections": detections
+    }
+
+
+def normalize_label(value):
+    """Normalize YOLO class labels and database names for matching."""
+    return re.sub(r"[\s_\-:/\\|]+", "", str(value or "").strip()).lower()
+
+
+def split_yolo_label(label):
+    """Support labels like hero_Ahri, trait:Sniper, item-bow, or exact names."""
+    raw = str(label or "").strip()
+    lowered = raw.lower()
+    for prefix, entity_type in (
+        ("hero_", "hero"), ("hero-", "hero"), ("hero:", "hero"),
+        ("trait_", "trait"), ("trait-", "trait"), ("trait:", "trait"),
+        ("item_", "item"), ("item-", "item"), ("item:", "item"),
+    ):
+        if lowered.startswith(prefix):
+            return entity_type, raw[len(prefix):]
+    return None, raw
+
+
+def match_yolo_entities(detections, game_data):
+    """Map YOLO class labels to known heroes, traits, and items."""
+    heroes_by_name = {normalize_label(h.get("name")): h for h in game_data.get("heroes", [])}
+    traits_by_name = {normalize_label(t.get("name")): t for t in game_data.get("traits", [])}
+    base_items_by_name = {normalize_label(i.get("name")): i for i in game_data.get("baseItems", [])}
+    recipes_by_name = {normalize_label(r.get("name")): r for r in game_data.get("recipes", {}).values()}
+
+    matched = {"heroes": [], "traits": [], "items": []}
+    seen = {"hero": set(), "trait": set(), "item": set()}
+
+    def add_once(entity_type, key, payload):
+        if not key or key in seen[entity_type]:
+            return
+        seen[entity_type].add(key)
+        matched[f"{entity_type}s"].append(payload)
+
+    for detection in sorted(detections, key=lambda item: item.get("confidence", 0), reverse=True):
+        entity_type, name = split_yolo_label(detection.get("label"))
+        key = normalize_label(name)
+
+        if entity_type in (None, "hero") and key in heroes_by_name:
+            hero = heroes_by_name[key]
+            add_once("hero", key, {
+                "name": hero.get("name"),
+                "cost": hero.get("cost", 0),
+                "traits": hero.get("traits", []),
+                "source": "yolo",
+                "confidence": detection.get("confidence"),
+                "box": detection.get("box")
+            })
+            continue
+
+        if entity_type in (None, "trait") and key in traits_by_name:
+            trait = traits_by_name[key]
+            add_once("trait", key, {
+                "name": trait.get("name"),
+                "breakpoints": trait.get("breakpoints", []),
+                "source": "yolo",
+                "confidence": detection.get("confidence"),
+                "box": detection.get("box")
+            })
+            continue
+
+        if entity_type in (None, "item"):
+            if key in base_items_by_name:
+                item = base_items_by_name[key]
+                add_once("item", key, {
+                    "name": item.get("name"),
+                    "type": "base",
+                    "source": "yolo",
+                    "confidence": detection.get("confidence"),
+                    "box": detection.get("box")
+                })
+            elif key in recipes_by_name:
+                item = recipes_by_name[key]
+                add_once("item", key, {
+                    "name": item.get("name"),
+                    "type": "recipe",
+                    "source": "yolo",
+                    "confidence": detection.get("confidence"),
+                    "box": detection.get("box")
+                })
+
+    return matched
+
+
+def merge_by_name(primary, fallback):
+    """Merge YOLO and OCR matches by name, keeping YOLO metadata first."""
+    merged = []
+    seen = set()
+    for item in [*(primary or []), *(fallback or [])]:
+        key = item.get("name")
+        if key and key not in seen:
+            merged.append(item)
+            seen.add(key)
+    return merged
+
+
+def recognize_image(image, game_data):
+    """Run YOLO first and OCR as a text fallback, then merge known entities."""
+    yolo = run_yolo(image)
+    yolo_matches = match_yolo_entities(yolo.get("detections", []), game_data)
+
+    texts = run_ocr(image)
+    ocr_matches = {
+        "heroes": match_heroes(texts, game_data.get("heroes", [])),
+        "traits": match_traits(texts, game_data.get("traits", [])),
+        "items": match_items(
+            texts,
+            game_data.get("baseItems", []),
+            game_data.get("recipes", {})
+        )
+    }
+
+    return {
+        "texts": texts,
+        "yolo": yolo,
+        "heroes": merge_by_name(yolo_matches["heroes"], ocr_matches["heroes"]),
+        "traits": merge_by_name(yolo_matches["traits"], ocr_matches["traits"]),
+        "items": merge_by_name(yolo_matches["items"], ocr_matches["items"])
+    }
 
 
 def match_heroes(texts, hero_list):
@@ -139,7 +353,29 @@ def match_items(texts, base_items, recipes):
 
 @app.route("/ocr/health", methods=["GET"])
 def health():
-    return jsonify({"ok": True, "service": "JCC OCR Server", "port": 5000})
+    model_exists = os.path.exists(YOLO_MODEL_PATH)
+    ocr_installed = dependency_available("paddleocr")
+    yolo_installed = dependency_available("ultralytics")
+    return jsonify({
+        "ok": True,
+        "service": "JCC Screen Recognition Server",
+        "port": 5000,
+        "ocr": {
+            "enabled": ocr_installed and ocr_error is None,
+            "engine": "PaddleOCR",
+            "dependencyInstalled": ocr_installed,
+            "error": ocr_error
+        },
+        "yolo": {
+            "enabled": model_exists and yolo_installed and yolo_error is None,
+            "modelPath": YOLO_MODEL_PATH,
+            "modelExists": model_exists,
+            "dependencyInstalled": yolo_installed,
+            "confidence": YOLO_CONF,
+            "device": YOLO_DEVICE or "auto",
+            "error": yolo_error
+        }
+    })
 
 
 @app.route("/ocr/recognize", methods=["POST"])
@@ -162,23 +398,12 @@ def recognize():
             return jsonify({"error": "Missing 'image' field"}), 400
 
         image = decode_image(image_data)
-        texts = run_ocr(image)
-
-        heroes = match_heroes(texts, game_data.get("heroes", []))
-        traits = match_traits(texts, game_data.get("traits", []))
-        items = match_items(
-            texts,
-            game_data.get("baseItems", []),
-            game_data.get("recipes", {})
-        )
+        recognized = recognize_image(image, game_data)
 
         return jsonify({
             "ok": True,
             "timestamp": datetime.now().isoformat(),
-            "texts": texts,
-            "heroes": heroes,
-            "traits": traits,
-            "items": items
+            **recognized
         })
 
     except Exception as e:
@@ -222,16 +447,11 @@ def analyze_board():
             return jsonify({"error": "Missing 'image' field"}), 400
 
         image = decode_image(image_data)
-        texts = run_ocr(image)
-
+        recognized_data = recognize_image(image, game_data)
         recognized = {
-            "heroes": match_heroes(texts, game_data.get("heroes", [])),
-            "traits": match_traits(texts, game_data.get("traits", [])),
-            "items": match_items(
-                texts,
-                game_data.get("baseItems", []),
-                game_data.get("recipes", {})
-            )
+            "heroes": recognized_data["heroes"],
+            "traits": recognized_data["traits"],
+            "items": recognized_data["items"]
         }
 
         # ── Analysis ──
@@ -300,6 +520,8 @@ def analyze_board():
         return jsonify({
             "ok": True,
             "timestamp": datetime.now().isoformat(),
+            "texts": recognized_data["texts"],
+            "yolo": recognized_data["yolo"],
             "recognized": recognized,
             "analysis": analysis
         })
@@ -338,10 +560,10 @@ def analyze_opponent():
             return jsonify({"error": "Missing 'image' field"}), 400
 
         image = decode_image(image_data)
-        texts = run_ocr(image)
+        recognized_data = recognize_image(image, game_data)
 
-        opponent_heroes = match_heroes(texts, game_data.get("heroes", []))
-        opponent_traits = match_traits(texts, game_data.get("traits", []))
+        opponent_heroes = recognized_data["heroes"]
+        opponent_traits = recognized_data["traits"]
 
         # Generate counter suggestion based on opponent traits
         counter_tips = []
@@ -363,6 +585,8 @@ def analyze_opponent():
         return jsonify({
             "ok": True,
             "timestamp": datetime.now().isoformat(),
+            "texts": recognized_data["texts"],
+            "yolo": recognized_data["yolo"],
             "opponentHeroes": opponent_heroes,
             "opponentTraits": opponent_traits,
             "counterSuggestion": " ".join(counter_tips)
