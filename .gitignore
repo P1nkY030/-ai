@@ -1,0 +1,3 @@
+.claude/
+models/*.pt
+models/*.onnx
