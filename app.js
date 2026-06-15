@@ -4,15 +4,13 @@ const credentials = Object.freeze({
   role: "管理员"
 });
 
-const defaultCatalog = window.GAME_VERSION_CATALOG || GAME_VERSION_CATALOG;
-const defaultVersionId = defaultCatalog.defaultVersionId || defaultCatalog.versions[0]?.id;
-const dataStorageKey = "jcc_console_versions_v1";
 const versionStorageKey = "jcc_console_active_version_v1";
 const sessionKey = "jcc_console_session_v1";
 
 const state = {
-  versions: loadVersions(),
-  activeVersionId: loadActiveVersionId(),
+  versions: [],
+  defaultVersionId: "",
+  activeVersionId: localStorage.getItem(versionStorageKey) || "",
   activeView: "comps",
   selectedCompId: "",
   tierFilter: "全部",
@@ -22,6 +20,22 @@ const state = {
   selectedItems: [],
   isAuthenticated: false
 };
+
+async function fetchData() {
+  const res = await fetch("/api/data");
+  if (!res.ok) throw new Error("API error: " + res.status);
+  return res.json();
+}
+
+async function pushData(data) {
+  const res = await fetch("/api/data", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error("Save failed: " + res.status);
+  return res.json();
+}
 
 const viewMeta = {
   comps: {
@@ -130,21 +144,6 @@ function getHeroMap(data) {
   return heroCacheMap;
 }
 
-function loadVersions() {
-  const stored = localStorage.getItem(dataStorageKey);
-  if (!stored) return clone(defaultCatalog.versions);
-  try {
-    const parsed = JSON.parse(stored);
-    return Array.isArray(parsed) && parsed.length ? parsed : clone(defaultCatalog.versions);
-  } catch {
-    return clone(defaultCatalog.versions);
-  }
-}
-
-function loadActiveVersionId() {
-  const stored = localStorage.getItem(versionStorageKey);
-  return stored || defaultVersionId;
-}
 
 function activeVersion() {
   return state.versions.find(version => version.id === state.activeVersionId) || state.versions[0];
@@ -154,9 +153,14 @@ function activeData() {
   return activeVersion().data;
 }
 
-function saveVersions() {
-  localStorage.setItem(dataStorageKey, JSON.stringify(state.versions));
+async function saveVersions() {
   localStorage.setItem(versionStorageKey, state.activeVersionId);
+  try {
+    await pushData({ defaultVersionId: state.defaultVersionId, versions: state.versions });
+  } catch (err) {
+    console.error("保存失败:", err);
+    showToast("数据保存失败，请检查服务是否运行。");
+  }
 }
 
 function saveSession() {
@@ -660,23 +664,28 @@ async function exportActiveVersion() {
   }
 }
 
-function resetCurrentVersionData() {
-  const defaultVersion = defaultCatalog.versions.find(version => version.id === state.activeVersionId);
-  if (!defaultVersion) {
-    showToast("当前版本不是内置版本，无法恢复种子数据。");
-    return;
-  }
-  const confirmed = window.confirm(`确认恢复「${defaultVersion.name}」的内置种子数据吗？本地改动会被覆盖。`);
+async function resetCurrentVersionData() {
+  const confirmed = window.confirm("确认恢复所有版本的内置种子数据吗？所有改动会被覆盖。");
   if (!confirmed) return;
-  const index = state.versions.findIndex(version => version.id === state.activeVersionId);
-  state.versions[index] = clone(defaultVersion);
-  state.selectedCompId = activeData().comps[0]?.id || "";
-  state.selectedHeroes = [];
-  state.selectedItems = [];
-  saveVersions();
-  renderAll();
-  if (activeData().comps[0]) fillForm(activeData().comps[0]);
-  showToast("已恢复当前版本种子数据。");
+  try {
+    const res = await fetch("/api/reset", { method: "POST" });
+    if (!res.ok) throw new Error("Reset failed");
+    const data = await res.json();
+    state.defaultVersionId = data.defaultVersionId || "";
+    state.versions = data.versions || [];
+    if (!state.versions.some(v => v.id === state.activeVersionId)) {
+      state.activeVersionId = state.defaultVersionId || state.versions[0]?.id || "";
+    }
+    state.selectedCompId = activeData().comps[0]?.id || "";
+    state.selectedHeroes = [];
+    state.selectedItems = [];
+    renderAll();
+    if (activeData().comps[0]) fillForm(activeData().comps[0]);
+    showToast("已恢复种子数据。");
+  } catch (err) {
+    console.error("重置失败:", err);
+    showToast("恢复失败，请检查服务是否运行。");
+  }
 }
 
 function renderCurrentView() {
@@ -877,11 +886,27 @@ function bindEvents() {
   els.resetDataBtn.addEventListener("click", resetCurrentVersionData);
 }
 
-function init() {
-  if (!state.versions.some(version => version.id === state.activeVersionId)) {
-    state.activeVersionId = state.versions[0]?.id || defaultVersionId;
+async function init() {
+  try {
+    const serverData = await fetchData();
+    state.defaultVersionId = serverData.defaultVersionId || "";
+    state.versions = serverData.versions || [];
+
+    if (!state.versions.length) {
+      showToast("服务器返回数据为空，请检查 data.json。");
+      return;
+    }
+
+    if (!state.versions.some(v => v.id === state.activeVersionId)) {
+      state.activeVersionId = state.defaultVersionId || state.versions[0]?.id || "";
+    }
+    state.selectedCompId = activeData().comps[0]?.id || "";
+  } catch (err) {
+    console.error("加载数据失败:", err);
+    showToast("无法连接服务器，请确认服务已启动 (start.bat)。");
+    return;
   }
-  state.selectedCompId = activeData().comps[0]?.id || "";
+
   bindEvents();
   setView("comps");
 
